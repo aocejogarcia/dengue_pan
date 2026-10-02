@@ -1,6 +1,6 @@
 ---
 title: "DENGUE"
-author: "Abraham Ocejo <br> Edileth Yocupicio"
+author: "Abraham Ocejo"
 date: '`r Sys.Date()`'
 output: html_document
 ---
@@ -24,9 +24,6 @@ if (Sys.Date() == floor_date(Sys.Date(), 'week') + 1) {
   anterior <- paste('../data/dengue/DENGUE2_', format(floor_date(Sys.Date(), 'week') + 1, '%d%m%y'), '.txt', sep = '')
   actual <- paste('../data/dengue/DENGUE2_', format(Sys.Date(), '%d%m%y'), '.txt', sep = '')
 }
-
-#anterior <- paste('data/DENGUE2_050126.txt', sep = '')
-#actual <- paste('data/DENGUE2_120126.txt', sep = '')
 
 dengue_actual <- read_delim(actual, delim = '|', locale = locale(encoding = 'latin1'), comment = '', quote = '') %>% mutate(CERTIFICADO_DEFUNCION = as.numeric(CERTIFICADO_DEFUNCION), IDE_TEL = as.numeric(IDE_TEL), IDE_CP = as.numeric(IDE_CP), OTRO_SINTOMA = as.character(OTRO_SINTOMA), CERTIFICADO_DEFUNCION = as.character(CERTIFICADO_DEFUNCION)) %>% 
 #  bind_rows(
