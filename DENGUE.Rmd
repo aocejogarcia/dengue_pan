@@ -1,0 +1,660 @@
+---
+title: "DENGUE"
+author: "Abraham Ocejo <br> Edileth Yocupicio"
+date: '`r Sys.Date()`'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(stringi)
+library(leaflet)
+library(leaflet.extras)
+library(sf)
+library(janitor)
+library(flextable)
+library(plotly)
+library(stringr)
+
+if (Sys.Date() == floor_date(Sys.Date(), 'week') + 1) {
+  actual <- paste('../data/dengue/DENGUE2_', format(floor_date(Sys.Date(), 'week') + 1, '%d%m%y'), '.txt', sep = '')
+  anterior <- paste('../data/dengue/DENGUE2_', format(floor_date(Sys.Date(), 'week') - 6, '%d%m%y'), '.txt', sep = '')
+} else {
+  anterior <- paste('../data/dengue/DENGUE2_', format(floor_date(Sys.Date(), 'week') + 1, '%d%m%y'), '.txt', sep = '')
+  actual <- paste('../data/dengue/DENGUE2_', format(Sys.Date(), '%d%m%y'), '.txt', sep = '')
+}
+
+#anterior <- paste('data/DENGUE2_050126.txt', sep = '')
+#actual <- paste('data/DENGUE2_120126.txt', sep = '')
+
+dengue_actual <- read_delim(actual, delim = '|', locale = locale(encoding = 'latin1'), comment = '', quote = '') %>% mutate(CERTIFICADO_DEFUNCION = as.numeric(CERTIFICADO_DEFUNCION), IDE_TEL = as.numeric(IDE_TEL), IDE_CP = as.numeric(IDE_CP), OTRO_SINTOMA = as.character(OTRO_SINTOMA), CERTIFICADO_DEFUNCION = as.character(CERTIFICADO_DEFUNCION)) %>% 
+#  bind_rows(
+#    read_delim('data/DENGUE2_311225.txt', delim = '|', locale = locale(encoding = 'latin1'), comment = '', quote = '') %>% mutate(IDE_TEL = as.numeric(IDE_TEL), TELFONO_TRABAJO = as.numeric(TELFONO_TRABAJO))
+#    ) %>% 
+  mutate(IDE_COL = str_remove_all(IDE_COL, pattern = ' Colonia| Pueblo| Ranchería| Ampliación| Fraccionamiento| Ejido| Residencial| Congregación| Unidad habitacional| Hacienda| Equipamiento| Poblado comunal| Zona federal'),
+         DES_MPO_RES = str_squish(str_remove(DES_MPO_RES, pattern = " SON")),
+         DES_MPO_REP = str_squish(str_remove(DES_MPO_REP, pattern = " SON")),
+         DES_LOC_RES = str_squish(DES_LOC_RES),
+         DES_EDO_RES = str_squish(DES_EDO_RES), 
+         DES_EDO_REP = str_squish(DES_EDO_REP)) %>% 
+  mutate(FEC_SOL_ATEN = case_when(
+    IDE_ID == 1400730 ~ dmy('14-06-2024'), 
+    T ~ FEC_SOL_ATEN
+  )) %>%
+  filter(DES_EDO_REP == 'SONORA' | is.na(DES_EDO_REP), FEC_INI_SIGNOS_SINT >= dmy('04-01-2026')#, year(floor_date(FEC_INI_SIGNOS_SINT, 'week') + 3) == year(Sys.Date())
+         ) %>% 
+  filter(!IDE_ID %in% c(1984821, 1977989, 1961235, 1959125, 1968280, 1985673, 1961400, 1988613,
+                        1992459, 1993378, 1997080, 1996905)) %>%
+  mutate(semana = paste(year(floor_date(FEC_INI_SIGNOS_SINT, "week") + 3), "-", str_pad(epiweek(floor_date(FEC_INI_SIGNOS_SINT, "week")), pad = "0", width = 2, side = "left"), sep = ""),
+         CVE_DEFUNCION = case_when(
+           IDE_ID %in% c(1011171) ~ 9, 
+           IDE_ID %in% c(1986353, 1987690, 2008032, 2016515, 2007783) ~ 1,
+           IDE_ID %in% c(2059241, 1955789, 2050413, 2059155, 1968707, 2068847, 1941966, 1921216, 2062541, 2023746, 2035339, 2049431, 2053424, 2058333, 2058672, 2061898, 2066818, 2062544, 1963142, 1922927, 1951044, 1941480, 1952418, 1998377, 2000513, 1984667, 1989993, 1993295, 1996411, 2011985, 2022949, 2024008, 2051101, 2036440, 2013575, 2029392, 2036437, 2066896, 2067967, 2041850, 2064006, 2057179, 2058821, 2066980, 2059221, 2061793, 2044995, 2052003, 2060727, 2028769, 2037307, 2066937, 1974400, 2020845, 2013984, 2061841, 2010199, 2029447, 2068860, 1975595, 2043658, 2059078, 1953734, 2046100, 1958900, 1997538, 2043186, 2009732, 2065172, 2009311, 2067651) ~ 9,
+    T ~ CVE_DEFUNCION
+    ),
+         ESTATUS_CASO = case_when(
+           IDE_ID %in% c(1387455, #1558102, 1563867, 1574084, 1585278,
+                         1387451, 
+                         1388556, 
+                         1983715) ~ 2,			
+              IDE_ID == 1844308 ~ 3,
+           T ~ ESTATUS_CASO
+           ), 
+         DES_DIAG_FINAL = case_when(
+           IDE_ID %in% c(1387455, # 1585278,
+                         1387451, 
+                         1388556, 
+                         1389861) ~ 'DENGUE NO GRAVE',
+           T ~ DES_DIAG_FINAL
+         )
+         ) %>% distinct(IDE_ID, .keep_all = T)
+
+dengue_anterior <- read_delim(anterior, delim = '|', locale = locale(encoding = 'latin1'), comment = '', quote = '') %>% 
+  mutate(CERTIFICADO_DEFUNCION = as.numeric(CERTIFICADO_DEFUNCION), IDE_TEL = as.numeric(IDE_TEL), IDE_CP = as.numeric(IDE_CP)) %>%
+#  bind_rows(
+#    read_delim('data/DENGUE2_20240225.txt', delim = '|', locale = locale(encoding = 'latin1'), comment = '', quote = '') %>% mutate(IDE_TEL = as.numeric(IDE_TEL), TELFONO_TRABAJO = as.numeric(TELFONO_TRABAJO))
+#) %>% 
+    mutate(     CVE_DEFUNCION = case_when(
+           IDE_ID %in% c(1011171) ~ 9, 
+           IDE_ID %in% c(1986353, 1987690, 2008032, 2016515, 2007783) ~ 1,
+           IDE_ID %in% c(2059241, 1955789, 2050413, 2059155, 1968707, 2068847, 1941966, 1921216, 2062541, 2023746, 2035339, 2049431, 2053424, 2058333, 2058672, 2061898, 2066818, 2062544, 1963142, 1922927, 1951044, 1941480, 1952418, 1998377, 2000513, 1984667, 1989993, 1993295, 1996411, 2011985, 2022949, 2024008, 2051101, 2036440, 2013575, 2029392, 2036437, 2066896, 2067967, 2041850, 2064006, 2057179, 2058821, 2066980, 2059221, 2061793, 2044995, 2052003, 2060727, 2028769, 2037307, 2066937, 1974400, 2020845, 2013984, 2061841, 2010199, 2029447, 2068860, 1975595, 2043658, 2059078, 1953734, 2046100, 1958900, 1997538, 2043186, 2009732, 2065172, 2009311, 2067651) ~ 9,
+    T ~ CVE_DEFUNCION
+    ),
+         ESTATUS_CASO = case_when(
+           IDE_ID %in% c(1387455, 1558102, 1563867, 1574084, 1585278,
+                         1387451,
+                         1388556, 
+                         1983715) ~ 2,
+           IDE_ID == 1844308 ~ 3,
+           T ~ ESTATUS_CASO
+           ), 
+         DES_DIAG_FINAL = case_when(
+           IDE_ID %in% c(1387455, 
+                         1387451, 
+                         1389861) ~ 'DENGUE NO GRAVE',
+           T ~ DES_DIAG_FINAL
+         )) %>% 
+    filter(CVE_EDO_REP == 26, FEC_INI_SIGNOS_SINT >= dmy('04-01-2026'), 
+!IDE_ID %in% c(1984821, 1977989, 1961235, 1959125, 1945984, 1968280, 1977279, 1985673, 1961400, 1988613,
+                        1986513), 
+           #year(floor_date(FEC_INI_SIGNOS_SINT, 'week') + 3) == year(Sys.Date())
+)
+dengue_anteriorCC <- dengue_anterior %>% 
+  filter(ESTATUS_CASO == 2) %>%
+  dplyr::select(IDE_ID)
+dengue_anteriorDF <- dengue_anterior %>% 
+  filter(CVE_DEFUNCION == 1, 
+         ESTATUS_CASO == 2) %>%
+  dplyr::select(IDE_ID)
+
+```
+
+
+```{r, include=FALSE}
+# Cargar las librerías necesarias
+library(httr)
+library(rvest)
+library(glue)
+
+
+temp <- tempfile()
+# Obtener el contenido de la página
+rows <- pdftools::pdf_text(read_html(
+    content(
+      GET(paste('https://www.gob.mx/salud/documentos/panorama-epidemiologico-de-dengue-', year(floor_date(Sys.Date(), 'week')-14), sep = ''), 
+          add_headers(`Connection` = "keep-alive", `User-Agent` = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:93.0) Gecko/20100101 Firefox/93.0')), 
+      "text", encoding = 'latin1')
+    )  %>%
+    html_nodes("a[href$='.pdf']") %>%  # Selecciona enlaces que terminan en .pdf
+    html_attr("href") %>%              # Extrae el atributo href (la URL)
+    na.omit() %>% 
+    paste('https://www.gob.mx', ., sep = '') %>% 
+    head(1)
+#    , destfile = temp, mode = 'wb', headers = c(`Connection` = "keep-alive", `User-Agent` = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/102.0.5005.61 Safari/537.36"), quiet = T)
+
+)[6] %>% 
+  textConnection() %>% 
+  scan(what="character", sep = "\n")#, fileEncoding = 'latin1')
+
+
+#rows <- pdftools::pdf_text('../data/dengue/Pano_dengue_17.pdf')[6] %>% 
+#  textConnection() %>% 
+#  scan(what="character", sep = "\n")
+
+bol <- data.frame(ESTADO = NA, DNG = NA, DCSA = NA, DG = NA, TOTAL = NA, 
+                  IA_DNG = NA, IA_DCSA = NA, IA_DG = NA, IA = NA)
+
+for (i in 1:32) {
+  bol[i,1] <- unlist(strsplit(rows[i+5]," \\s+ "))[1]
+  bol[i,2] <- unlist(strsplit(rows[i+5]," \\s+ "))[2]
+  bol[i,3] <- unlist(strsplit(rows[i+5]," \\s+ "))[3]
+  bol[i,4] <- unlist(strsplit(rows[i+5]," \\s+ "))[4]
+  bol[i,5] <- unlist(strsplit(rows[i+5]," \\s+ "))[5]
+  bol[i,6] <- unlist(strsplit(rows[i+5]," \\s+ "))[6]
+  bol[i,7] <- unlist(strsplit(rows[i+5]," \\s+ "))[7]
+  bol[i,8] <- unlist(strsplit(rows[i+5]," \\s+ "))[8]
+  bol[i,9] <- unlist(strsplit(rows[i+5]," \\s+ "))[9]
+}
+
+#bol$ESTADO[16] <- paste(unlist(strsplit(rows[14+7]," \\s+ "))[1], unlist(strsplit(rows[14+7]," \\s+ "))[2]) 
+#bol$DNG[16] <- unlist(strsplit(rows[14+7]," \\s+ "))[3]
+#bol$DCSA[16] <- unlist(strsplit(rows[14+7]," \\s+ "))[4]
+#bol$DG[16] <- unlist(strsplit(rows[14+7]," \\s+ "))[5]
+#bol$TOTAL[16] <- unlist(strsplit(rows[14+7]," \\s+ "))[6]
+#bol$IA_DNG[16] <- unlist(strsplit(rows[14+7]," \\s+ "))[7]
+#bol$IA_DCSA[16] <- unlist(strsplit(rows[14+7]," \\s+ "))[8]
+#bol$IA_DG[16] <- unlist(strsplit(rows[14+7]," \\s+ "))[9]
+#bol$IA[16] <- unlist(strsplit(rows[14+7]," \\s+ "))[10]
+
+
+bol <- bol %>%
+  mutate(ESTADO = str_remove_all(string = ESTADO, pattern = ' \\*\\*\\*| \\*\\*'),
+         DNG = as.numeric(str_remove(DNG, pattern = ',')), 
+         DCSA = as.numeric(str_remove(DCSA, ',')), 
+         DG = as.numeric(str_remove(DG, ',')), 
+         TOTAL = as.numeric(str_remove(TOTAL, ',')),
+         IA_DNG = as.numeric(str_remove_all(IA_DNG, ' ')), 
+         IA_DCSA = as.numeric(str_remove_all(IA_DCSA, ' ')), 
+         IA_DG = as.numeric(str_remove_all(IA_DG, ' ')), 
+         IA = as.numeric(str_remove_all(IA, ' ')),
+         ) %>%
+  replace(is.na(.), 0) %>% 
+  arrange(desc(TOTAL)) %>% 
+  mutate(ESTADO = fct_inorder(ESTADO, ordered = T))
+
+#openxlsx::write.xlsx(bol, 'dengue nacional.xlsx', overwrite = T)
+
+nacional <- read_csv('../data/pobproy_quinq1.csv', locale = locale(encoding = 'latin1'), comment = '', quote = '') %>% 
+  filter(ANO == as.numeric(format(Sys.Date(), '%Y'))) %>%
+  summarise(poblacion = sum(POB_TOTAL, na.rm = T))
+
+IAnac <- round(sum(bol$TOTAL, na.rm = T)/sum(nacional$poblacion, na.rm = T)*100000,1)
+CAnac <- sum(bol$TOTAL, na.rm = T)
+
+
+
+```
+
+
+## Panorama Nacional de Dengue `r as.numeric(format(Sys.Date(), '%Y'))`
+
+```{r, echo=F, warning=F, message=F, fig.width=10}
+plot_ly(bol, x = ~ESTADO) %>%
+  add_bars(y = ~TOTAL, name = 'Casos', yaxis = 'y') %>% 
+  layout(title = '', legend = list(x = 1.1, y = 0.9, orientation = "v"),
+         yaxis2 = list(title = "Incidencia por 100 000 habs", side = "right", showgrid = F, ticks="outside",
+                       zerolinecolor = '#000000', overlaying = "y", range = c(0, 1.2 * max(bol$IA, na.rm = T))),
+         xaxis = list(title = 'Entidad Federativa',
+                      showgrid = F,
+                      ticks="outside",
+                      zerolinecolor = '#000000', 
+                      tickangle=270#, categoryorder = "array", categoryarray = c(quinqueniosarray)
+         ),
+         yaxis = list(title = 'Número de casos',
+                      showgrid = F,
+                      ticks="outside", tickformat = ",d",
+                      zerolinecolor = '#000000', range = c(0, 1.2 * (max(bol$TOTAL, na.rm = T))))) %>%
+        add_trace( y = ~IA, name = 'Incidencia acumulada', type = 'scatter', mode = 'line', yaxis = 'y2') %>% 
+  add_annotations(x = 0.1, y = 0.9, xref = "paper", yref = "paper", text = paste("Incidencia Nacional ", IAnac, "<br> casos por 100 000 habs", sep = ""), showarrow = F) %>%
+  add_annotations(x = 0.9, y = 0.9, xref = "paper", yref = "paper", text = paste("Casos acumulados ", CAnac, "<br> a nivel nacional", sep = ""), showarrow = F)
+
+```
+
+
+```{r, echo=F, warning=F, message=F}
+bol %>% 
+  DT::datatable(extensions = 'Buttons', rownames = F, 
+                options = list(dom = 'Blfrtip', 
+                               buttons = 'excel', 
+                               lengthMenu = list(c( -1), 
+                                                 c( 'All')))) 
+
+```
+
+
+## Informe de Dengue
+
+```{r, echo=FALSE, message=F, warning=F}
+## SEMANA -----
+CC <- dengue_actual %>%
+  filter(!IDE_ID %in% dengue_anteriorCC$IDE_ID) %>%
+  filter(ESTATUS_CASO == 2)
+DEF <- dengue_actual %>%
+  filter(!IDE_ID %in% dengue_anteriorDF$IDE_ID) %>%
+  filter(ESTATUS_CASO == 2, CVE_DEFUNCION == 1)
+ESTUDIADOS <- dengue_actual %>%
+  filter(!IDE_ID %in% dengue_anterior$IDE_ID)
+
+  #write.csv('Estudiados_dengue.csv', fileEncoding = 'latin1')
+
+semana <- tibble(`Casos confirmados` = nrow(CC),
+                 `Defunciones` = nrow(DEF)
+)
+
+casos_municipio <- CC %>%
+  count(DES_MPO_RES) %>% 
+  mutate(DES_MPO_RES = str_to_title(DES_MPO_RES, locale = 'en')) %>%
+  rename(Municipio = DES_MPO_RES) %>%
+  arrange(desc(n))
+defunciones_municipio <- DEF %>%
+  count(DES_MPO_REP) %>%
+  mutate(DES_MPO_REP = str_to_title(DES_MPO_REP, locale = 'en')) %>%
+  rename(Municipio = DES_MPO_REP) %>%
+  arrange(desc(n))
+## ACUMULADOS ----
+casos_acumulados <- dengue_actual %>% 
+  filter(ESTATUS_CASO == 2) %>% 
+  count() %>%
+  rename(Casos = n)
+defunciones_acumulados <- dengue_actual %>% 
+  filter(ESTATUS_CASO == 2, CVE_DEFUNCION == 1) %>% 
+  count() %>%
+  rename(Defunciones = n)
+letalidad <- cbind(casos_acumulados, defunciones_acumulados) %>%
+  mutate(Letalidad = round(Defunciones/Casos*100, 1))
+remove(casos_acumulados)
+remove(defunciones_acumulados)
+## GRAFICAS ----
+### Casos por edad y sexo ----
+casos_edad <- dengue_actual %>%
+  filter(ESTATUS_CASO == 2) %>%
+  mutate(edad_fac = case_when(
+    IDE_EDA_ANO > 0 & IDE_EDA_ANO <= 5    ~ '0 - 5',
+    IDE_EDA_ANO >= 6 & IDE_EDA_ANO <= 14  ~ '6 - 14',
+    IDE_EDA_ANO >= 15 & IDE_EDA_ANO <= 24 ~ '15 - 24',
+    IDE_EDA_ANO >= 25 & IDE_EDA_ANO <= 44 ~ '25 - 44',
+    IDE_EDA_ANO >= 45 & IDE_EDA_ANO <= 59 ~ '45 - 59',
+    IDE_EDA_ANO >= 60                     ~ '60 y más',
+    TRUE ~ NA_character_
+  ), sex = case_when(
+    IDE_SEX == 1 ~ 'Hombre',
+    IDE_SEX == 2 ~ 'Mujer',
+    TRUE ~ NA_character_
+  )) %>%
+  mutate(edad_fac = fct(edad_fac, levels = c('0 - 5', '6 - 14','15 - 24','25 - 44','45 - 59','60 y más'))) %>%
+  count(sex, edad_fac) %>%
+  pivot_wider(values_from = n, names_from = sex)
+#write.csv(casos_edad, 'casos por sexo y edad.csv', row.names = F)
+### Casos y defunciones por derechohabiencia ----
+casos_sector <- dengue_actual %>%
+  filter(ESTATUS_CASO == 2) %>%
+  mutate(Defunciones = ifelse(!is.na(FEC_DEFUNCION), 'Defunción', 'No Fatal'),
+         DES_INS_UNIDAD = ifelse(DES_INS_UNIDAD == 'OTRAS', 'ISSSTESON', DES_INS_UNIDAD)) %>%
+  count(Defunciones, DES_INS_UNIDAD) %>%
+  pivot_wider(values_from = n, names_from = Defunciones) %>%
+  mutate(Defunción = 0) %>%
+  arrange(desc(Defunción)) %>%
+  left_join(tibble(DES_INS_UNIDAD = NA, `No Fatal` = NA, Defunción = NA)) %>% 
+  dplyr::select(DES_INS_UNIDAD, `No Fatal`, Defunción)
+#write.csv(casos_sector, 'casos por sector.csv', row.names = F)
+
+#poblaciones <- read_csv('data/base_municipios_sonora.csv') %>% 
+#    group_by(MUN) %>%
+#  summarise(poblacion = sum(POB, na.rm = T)) %>%
+#  mutate(MUN = str_to_upper(MUN, locale = 'en'))
+
+#poblaciones <- read_csv('data/base_municipios_sonora.csv') %>% 
+#    group_by(MUN) %>%
+#  summarise(poblacion = sum(POB, na.rm = T)) %>%
+#  mutate(MUN = str_to_upper(MUN, locale = 'en'))
+
+## REVISAR LOS NOMBRES DE LOS MUNICIPIOS ----
+poblacion <- read_rds('../data/poblacion_1990_2040.rds') %>%
+  filter(ANO == year(floor_date(Sys.Date(), 'week') + 3), CVE_ENT == '26') %>%
+  rename(MUN = NOM_MUN) %>% 
+  group_by(MUN) %>% 
+  summarise(POB = sum(POB)) %>% 
+  mutate(MUN = stri_trans_general(str = str_to_upper(MUN, locale = 'en'), id = "Latin-ASCII"))
+
+signos <- dengue_actual %>%
+  filter(ESTATUS_CASO == 2) %>%
+  count(DES_DIAG_FINAL) %>%
+  pivot_wider(values_from = n, names_from = DES_DIAG_FINAL) %>% 
+  left_join(
+    tibble(`DENGUE CON SIGNOS DE ALARMA` = NA, `DENGUE GRAVE` = NA, `DENGUE NO GRAVE` = NA)
+    )
+
+```
+
+### Casos estudiados  
+`r nrow(ESTUDIADOS)`
+
+### Casos estudiados acumulados  
+`r nrow(dengue_actual)`
+
+### Casos en la semana de dengue, Sonora `r as.numeric(format(Sys.Date(), '%Y'))`  
+`r flextable(semana)` 
+
+### Casos acumulados de Dengue, Sonora `r as.numeric(format(Sys.Date(), '%Y'))`  
+`r flextable(letalidad)`   
+
+
+### Casos de Dengue por severidad, Sonora, `r as.numeric(format(Sys.Date(), '%Y'))`  
+`r flextable(signos)`
+
+
+### Casos de Dengue por municipio de residencia en Sonora durante la ultima semana    
+`r CC %>% mutate(DES_MPO_RES = case_when(DES_EDO_RES != 'SONORA' ~ DES_MPO_REP, T ~ DES_MPO_RES)) %>% count(DES_MPO_RES) %>% arrange(desc(n)) %>% rename(MUNICIPIO = DES_MPO_RES, CASOS = n) %>% flextable()`
+
+
+### Casos estudiados por municipio y toma de muestra
+```{r, echo=FALSE, message=F, warning=F}
+ESTUDIADOS %>% 
+  count(DES_MPO_REP, FECHA_TOMA_MUESTRA, ESTATUS_CASO) %>%
+  rename(Municipio = DES_MPO_REP, ESTATUS = ESTATUS_CASO, 'No. de casos' = n) %>% 
+  mutate(ESTATUS = case_when(
+    ESTATUS == 1 ~ 'Probable',
+    ESTATUS == 2 ~ 'Confirmado',
+    ESTATUS == 3 ~ 'Descartado'
+  ), Municipio = str_to_title(Municipio)) %>% 
+  DT::datatable(extensions = 'Buttons', rownames = F, 
+                options = list(dom = 'Blfrtip', 
+                               buttons = 'excel', 
+                               lengthMenu = list(c( -1), 
+                                                 c( 'All')))) 
+```
+
+## MAPA  
+
+
+```{r, echo=FALSE, message=F, warning=F}
+son <- st_read(dsn = "../data/map/mun22cw.shp", quiet = TRUE) %>%
+  filter(CVE_ENT == '26') %>%
+  mutate(MUN = stri_trans_general(str = str_to_upper(NOMGEO, locale = 'en'), id = "Latin-ASCII")) %>%
+  st_transform(4326)
+
+dengue_ <- dengue_actual %>%
+  filter(ESTATUS_CASO == 2, FEC_INI_SIGNOS_SINT >= Sys.Date() - 15) %>%
+  mutate(DES_MPO_RES = case_when(
+    DES_EDO_RES != 'SONORA' ~ str_squish(str_remove_all(DES_MPO_REP, pattern = ' SON')),
+    T ~ DES_MPO_RES
+  )) %>%
+  count(DES_MPO_RES) %>%
+  rename(MUN = DES_MPO_RES) %>%
+  left_join(poblacion) %>%
+  mutate(IA = round(n/POB*100000,1)) %>%
+  arrange(desc(IA))
+
+dengue_c <- dengue_actual %>%
+  filter(ESTATUS_CASO == 2) %>%
+  mutate(DES_MPO_RES = case_when(
+    DES_EDO_RES != 'SONORA' ~ str_squish(str_remove_all(DES_MPO_REP, pattern = ' SON')),
+    T ~ DES_MPO_RES
+  )) %>%
+  count(DES_MPO_RES) %>%
+  rename(MUN = DES_MPO_RES) %>%
+  left_join(poblacion) %>%
+  mutate(IA = round(n/POB*100000,1)) %>%
+  arrange(desc(IA))
+
+  
+son <- full_join(son, dengue_)
+
+pal <- colorQuantile(palette = c('#960E53', 
+                       '#410324', 
+                       '#DC7F37'), na.color = 'gray',
+                      domain = son$IA, n = 3, reverse = T)
+
+#pal <- colorBin(c("#CD946F","#EF7F1A", "#56070C"), son$IA, 
+#                bins = c(0,max(son$IA, na.rm = T)/3,max(son$IA, na.rm = T)/3*2,max(son$IA, na.rm = T)), 
+#                pretty = F, 
+#                na.color = "#a9a7a5")
+#plabs <- c(0,round(max(son$IA, na.rm = T)/3, 1), round(max(son$IA, na.rm = T)/3*2, 1), round(max(son$IA, na.rm = T),1), 'Sin casos')
+
+leaflet() %>%
+  addPolygons(data = son, 
+              label = ~paste(NOMGEO,
+                             ifelse(!is.na(IA), paste("incidencia de ",round(IA, digits = 1)," por 100,000 habs.", sep = ''),
+                                    paste("sin casos")), 
+                             sep = ", "), 
+              group = "Incidencia",
+              fillColor = ~pal(IA), 
+              fillOpacity = 1, 
+              weight = 1,               
+              color = "black",
+              labelOptions = labelOptions(style = list(textsize = "30px"))) %>%
+  addLegend("bottomleft", 
+            group = "Incidencia",
+            colors = c('#960E53', 
+                       '#410324', 
+                       '#DC7F37',
+                       'gray'),
+            labels = c(
+              paste(round(quantile(son$IA, na.rm = T, probs = c(0, 0.33, 0.66, 1))[3], 2),
+                    round(quantile(son$IA, na.rm = T, probs = c(0, 0.33, 0.66, 1))[4], 2), sep = ' - '),
+              paste(round(quantile(son$IA, na.rm = T, probs = c(0, 0.33, 0.66, 1))[2], 2),
+                    round(quantile(son$IA, na.rm = T, probs = c(0, 0.33, 0.66, 1))[3], 2), sep = ' - '),
+              paste(round(quantile(son$IA, na.rm = T, probs = c(0, 0.33, 0.66, 1))[1], 2),
+                    round(quantile(son$IA, na.rm = T, probs = c(0, 0.33, 0.66, 1))[2], 2), sep = ' - '),
+              'Sin casos'),
+            title = "Incidencia por 100,000 habs.") %>%
+  addScaleBar(position = "bottomright", options = scaleBarOptions(maxWidth = 200, metric = T, imperial = F)) %>%
+  setView(-111.04834001095054, 29.72064764786741,zoom = 6) %>% 
+  setMapWidgetStyle(list(background= "white"))
+
+```
+
+
+```{r, warning=F, message=F,echo=F}
+#completo_c <- data.frame(MUN = ' TOTAL', n = sum(dengue_c$n, na.rm = T), POB = sum(poblacion$POB, na.rm = T), IA = round(sum(dengue_c$n, na.rm = T)/sum(poblacion$POB, na.rm = T)*100000,1))
+#completo <- data.frame(MUN = ' TOTAL', n = sum(dengue_$n, na.rm = T), POB = sum(poblacion$POB, na.rm = T), IA = round(sum(dengue_$n, na.rm = T)/sum(poblacion$POB, na.rm = T)*100000,1))
+
+D <- full_join(
+dengue_ %>% rename(Municipio = MUN, Casos_2_semanas = n, IA_2_semanas = IA),
+dengue_c %>% rename(Municipio = MUN, Casos_acumulados = n, IA_acumulada = IA)
+) %>% replace(is.na(.), 0)
+
+D <- bind_rows(D,
+          data.frame(Municipio = 'TOTAL', Casos_2_semanas = sum(D$Casos_2_semanas, na.rm = T), POB = sum(poblacion$POB, na.rm = T), IA_2_semanas = round(sum(D$Casos_2_semanas, na.rm = T)/sum(poblacion$POB, na.rm = T)*100000,1), Casos_acumulados = sum(D$Casos_acumulados, na.rm = T), IA_acumulada = round(sum(D$Casos_acumulados, na.rm = T)/sum(poblacion$POB, na.rm = T)*100000,1))) %>% select(Municipio, Casos_2_semanas, IA_2_semanas, Casos_acumulados, IA_acumulada, POB)
+
+```
+
+
+
+### TABLA últimas dos semanas y acumulado   
+`r flextable(D)`
+
+
+### Probables por municipio   
+
+```{r, warning=F, message=F,echo=F}
+dengue_actual %>%
+  #filter(year(floor_date(FEC_INI_SIGNOS_SINT, 'week') + 3) == year(Sys.Date())) %>%
+  group_by(Semana = epiweek(FEC_INI_SIGNOS_SINT)) %>%
+  count(DES_MPO_RES, ESTATUS_CASO) %>%
+  pivot_wider(names_from = ESTATUS_CASO, values_from = n, values_fill = 0) %>%
+  left_join(tibble(Semana = NA, `1` = NA, `2` = NA, `3` = NA)) %>% 
+  filter(!is.na(Semana)) %>% 
+  rename(Probables = `1`, Confirmados = `2`, Descartados = `3`, Municipio = DES_MPO_RES) %>%
+  mutate(Municipio = stringr::str_to_title(Municipio)) %>%
+  ungroup() %>%
+  dplyr::select(-Confirmados, -Descartados) %>%
+  pivot_wider(values_from = Probables, names_from = Semana, values_fill = 0) %>%
+  janitor::adorn_totals(where = 'col') %>% 
+  arrange(desc(Total)) %>% 
+  filter(Total >0) %>% 
+  DT::datatable(extensions = 'Buttons', rownames = F, 
+                options = list(dom = 'Blfrtip', 
+                               buttons = 'excel', 
+                               lengthMenu = list(c( -1), 
+                                                 c( 'All')))) 
+
+#  openxlsx::write.xlsx('Estudiados por municipio2.xlsx', overwrite = T)
+```
+
+
+### Positividad y estimados    
+
+```{r, warning=F, message=F,echo=F}
+
+dengue_actual %>%
+  bind_rows(read_delim('../data/dengue/DENGUE2_20250220.txt', delim = '|', comment = '', quote = '') %>% 
+              select(-IDE_TEL, -TELFONO_TRABAJO, -DENGUE_PCR_CQ) %>% 
+              filter(str_detect(DES_EDO_REP, pattern =  'SONORA') | is.na(DES_EDO_REP)) %>% 
+              mutate(CERTIFICADO_DEFUNCION = as.character(CERTIFICADO_DEFUNCION)
+                     )%>% 
+  filter(!IDE_ID %in% c(1984821, 1977989, 1961235, 1959125, 1968280, 1985673, 1961400, 1988613,
+                        1992459, 1993378, 1997080, 1996905)) %>%
+  mutate(semana = paste(year(floor_date(FEC_INI_SIGNOS_SINT, "week") + 3), "-", str_pad(epiweek(floor_date(FEC_INI_SIGNOS_SINT, "week")), pad = "0", width = 2, side = "left"), sep = ""),
+         CVE_DEFUNCION = case_when(
+           IDE_ID %in% c(1011171) ~ 9, 
+           IDE_ID %in% c(1986353, 1987690, 2008032, 2016515, 2007783) ~ 1,
+           IDE_ID %in% c(2059241, 1955789, 2050413, 2059155, 1968707, 2068847, 1941966, 1921216, 2062541, 2023746, 2035339, 2049431, 2053424, 2058333, 2058672, 2061898, 2066818, 2062544, 1963142, 1922927, 1951044, 1941480, 1952418, 1998377, 2000513, 1984667, 1989993, 1993295, 1996411, 2011985, 2022949, 2024008, 2051101, 2036440, 2013575, 2029392, 2036437, 2066896, 2067967, 2041850, 2064006, 2057179, 2058821, 2066980, 2059221, 2061793, 2044995, 2052003, 2060727, 2028769, 2037307, 2066937, 1974400, 2020845, 2013984, 2061841, 2010199, 2029447, 2068860, 1975595, 2043658, 2059078, 1953734, 2046100, 1958900, 1997538, 2043186, 2009732, 2065172, 2009311, 2067651) ~ 9,
+    T ~ CVE_DEFUNCION
+    ),
+         ESTATUS_CASO = case_when(
+           IDE_ID %in% c(1387455, #1558102, 1563867, 1574084, 1585278,
+                         1387451, 
+                         1388556, 
+                         1983715) ~ 2,			
+              IDE_ID == 1844308 ~ 3,
+           T ~ ESTATUS_CASO
+           ), 
+         DES_DIAG_FINAL = case_when(
+           IDE_ID %in% c(1387455, # 1585278,
+                         1387451, 
+                         1388556, 
+                         1389861) ~ 'DENGUE NO GRAVE',
+           T ~ DES_DIAG_FINAL
+         )
+         ) %>% distinct(IDE_ID, .keep_all = T)
+  ) %>% 
+  count(semana, ESTATUS_CASO) %>%
+  pivot_wider(names_from = ESTATUS_CASO, values_from = n) %>%
+  left_join(tibble(semana = NA, `1` = NA, `2` = NA, `3` = NA)) %>%
+  filter(!is.na(semana)) %>% 
+  rename(Probables = `1`, Confirmados = `2`, Descartados = `3`) %>%
+  arrange(semana) %>%
+  replace(is.na(.), 0) %>% 
+  mutate(Positividad = Confirmados/(Confirmados + Descartados)) %>%
+  mutate(Estimados = round(Confirmados + (Probables*Positividad), 0))  %>% 
+  DT::datatable(extensions = 'Buttons', rownames = F, 
+                options = list(dom = 'Blfrtip', 
+                               buttons = 'excel', 
+                               lengthMenu = list(c( -1), 
+                                                 c( 'All')))) 
+
+#  openxlsx::write.xlsx('Positividad - estimados dengue.xlsx', overwrite = T)
+```
+
+
+### Probables y confirmados    
+```{r, warning=F, message=F,echo=F}
+dengue_actual %>% 
+  filter(ESTATUS_CASO %in% c(1,2)#, year(floor_date(FEC_CAPTURA, 'week') + 3) == year(Sys.Date())
+         ) %>% 
+  count(semana = epiweek(FEC_CAPTURA)) %>% 
+  right_join(tibble(semana = seq(1,53))) %>%
+  arrange(semana)  %>% 
+  DT::datatable(extensions = 'Buttons', rownames = F, 
+                options = list(dom = 'Blsfrtip', 
+                               buttons = 'excel', 
+                               lengthMenu = list(c(-1), 
+                                                 c( 'All')))) 
+ 
+#  openxlsx::write.xlsx('probables y confirmados.xlsx', overwrite = T)
+
+```
+
+
+## Indicadores
+#### Acumulado
+
+```{r, warning=F, message=F,echo=F}
+
+dengue_fe <- dengue_actual %>% filter(DES_EDO_REP == 'SONORA')
+
+dengue_fe %>% 
+  mutate(opor_aten = as.numeric(FEC_SOL_ATEN - FEC_INI_SIGNOS_SINT),
+         not_opor = as.numeric(FEC_NOTIF_EDO - FEC_SOL_ATEN),
+         sint_not = as.numeric(FEC_NOTIF_EDO - FEC_INI_SIGNOS_SINT)) %>%
+  mutate(opor_aten = ifelse(opor_aten < 0, NA, opor_aten),
+         not_opor = ifelse(not_opor < 0, NA, not_opor),
+         sint_not = ifelse(sint_not < 0, NA, sint_not)) %>% 
+  group_by(CVE_JUR_REP) %>% 
+  summarise(opor_aten = round(mean(opor_aten, na.rm = T), 1),
+            not_opor = round(mean(not_opor, na.rm = T), 1),
+            sint_not = round(mean(sint_not, na.rm = T), 1)) %>% 
+  rename('Oportunidad de atención' = opor_aten,
+         'Notificación oportuna' = not_opor,
+         'Inicio de síntomas vs notificación' = sint_not,
+         DSB = CVE_JUR_REP) %>% 
+  bind_rows(
+    dengue_fe %>% 
+  mutate(opor_aten = as.numeric(FEC_SOL_ATEN - FEC_INI_SIGNOS_SINT),
+         not_opor = as.numeric(FEC_NOTIF_EDO - FEC_SOL_ATEN),
+         sint_not = as.numeric(FEC_NOTIF_EDO - FEC_INI_SIGNOS_SINT)) %>%
+  mutate(opor_aten = ifelse(opor_aten < 0, NA, opor_aten),
+         not_opor = ifelse(not_opor < 0, NA, not_opor),
+         sint_not = ifelse(sint_not < 0, NA, sint_not)) %>% 
+  summarise(opor_aten = round(mean(opor_aten, na.rm = T), 1),
+            not_opor = round(mean(not_opor, na.rm = T), 1),
+            sint_not = round(mean(sint_not, na.rm = T), 1)) %>% 
+  rename('Oportunidad de atención' = opor_aten,
+         'Notificación oportuna' = not_opor,
+         'Inicio de síntomas vs notificación' = sint_not) %>% 
+    mutate(DSB = 0)
+  ) %>%  mutate(DSB = ifelse(DSB == 0, 'Estatal', DSB)) %>% 
+  flextable() %>% autofit()
+```
+
+#### Últimas dos semanas
+```{r, warning=F, message=F,echo=F}
+dengue_fe %>% 
+  filter(FEC_CAPTURA >= Sys.Date() - 15) %>% 
+  mutate(opor_aten = as.numeric(FEC_SOL_ATEN - FEC_INI_SIGNOS_SINT),
+         not_opor = as.numeric(FEC_NOTIF_EDO - FEC_SOL_ATEN),
+         sint_not = as.numeric(FEC_NOTIF_EDO - FEC_INI_SIGNOS_SINT)) %>%
+  mutate(opor_aten = ifelse(opor_aten < 0, NA, opor_aten),
+         not_opor = ifelse(not_opor < 0, NA, not_opor),
+         sint_not = ifelse(sint_not < 0, NA, sint_not)) %>% 
+  group_by(CVE_JUR_REP) %>% 
+  summarise(opor_aten = round(mean(opor_aten, na.rm = T), 1),
+            not_opor = round(mean(not_opor, na.rm = T), 1),
+            sint_not = round(mean(sint_not, na.rm = T), 1)) %>% 
+   rename('Oportunidad de atención' = opor_aten,
+         'Notificación oportuna' = not_opor,
+         'Inicio de síntomas vs notificación' = sint_not,
+         DSB = CVE_JUR_REP) %>% 
+bind_rows(
+dengue_fe %>% 
+  filter(FEC_CAPTURA >= Sys.Date() - 15) %>% 
+  mutate(opor_aten = as.numeric(FEC_SOL_ATEN - FEC_INI_SIGNOS_SINT),
+         not_opor = as.numeric(FEC_NOTIF_EDO - FEC_SOL_ATEN),
+         sint_not = as.numeric(FEC_NOTIF_EDO - FEC_INI_SIGNOS_SINT)) %>%
+  mutate(opor_aten = ifelse(opor_aten < 0, NA, opor_aten),
+         not_opor = ifelse(not_opor < 0, NA, not_opor),
+         sint_not = ifelse(sint_not < 0, NA, sint_not)) %>% 
+  summarise(opor_aten = round(mean(opor_aten, na.rm = T), 1),
+            not_opor = round(mean(not_opor, na.rm = T), 1),
+            sint_not = round(mean(sint_not, na.rm = T), 1)) %>% 
+  rename('Oportunidad de atención' = opor_aten,
+         'Notificación oportuna' = not_opor,
+         'Inicio de síntomas vs notificación' = sint_not) %>% 
+  mutate(DSB = 0)
+) %>% mutate(DSB = ifelse(DSB == 0, 'Estatal', DSB)) %>% 
+  flextable %>% autofit () 
+
+
+```
